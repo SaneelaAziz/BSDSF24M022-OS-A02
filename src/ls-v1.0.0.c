@@ -1,10 +1,6 @@
 /*
-* Programming Assignment 02: lsv1.0.0
-* This is the source file of version 1.0.0
-* Usage:
-*       $ lsv1.0.0
-*       $ lsv1.0.0  /home
-*       $ lsv1.0.0  /home/kali/   /etc/
+* Programming Assignment 02: ls v1.1.0
+* Adds the -l (long listing) option.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,30 +9,54 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <grp.h>
+#include <time.h>
 
 extern int errno;
 
-void do_ls(const char *dir);
+void do_ls(const char *dir, int long_flag);
+void print_long(const char *dir, const char *name);
+void mode_to_str(mode_t m, char *s);
 
-int main(int argc, char const *argv[])
+int main(int argc, char *argv[])
 {
-    if (argc == 1)
+    int opt;
+    int long_flag = 0;
+
+    while ((opt = getopt(argc, argv, "l")) != -1)
     {
-        do_ls(".");
+        switch (opt)
+        {
+        case 'l':
+            long_flag = 1;
+            break;
+        default:
+            fprintf(stderr, "Usage: %s [-l] [dir...]\n", argv[0]);
+            return 1;
+        }
+    }
+
+    if (optind == argc)
+    {
+        do_ls(".", long_flag);
     }
     else
     {
-        for (int i = 1; i < argc; i++)
+        for (int i = optind; i < argc; i++)
         {
-            printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i]);
-            puts("");
+            if (argc - optind > 1)
+                printf("%s:\n", argv[i]);
+            do_ls(argv[i], long_flag);
+            if (argc - optind > 1)
+                puts("");
         }
     }
     return 0;
 }
 
-void do_ls(const char *dir)
+void do_ls(const char *dir, int long_flag)
 {
     struct dirent *entry;
     DIR *dp = opendir(dir);
@@ -45,18 +65,108 @@ void do_ls(const char *dir)
         fprintf(stderr, "Cannot open directory : %s\n", dir);
         return;
     }
+
+    /* In long mode, first pass: print the "total" line (in 1K blocks) */
+    if (long_flag)
+    {
+        long total = 0;
+        while ((entry = readdir(dp)) != NULL)
+        {
+            if (entry->d_name[0] == '.')
+                continue;
+            char path[4096];
+            struct stat st;
+            snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+            if (lstat(path, &st) == 0)
+                total += st.st_blocks;
+        }
+        printf("total %ld\n", total / 2);
+        rewinddir(dp);
+    }
+
     errno = 0;
     while ((entry = readdir(dp)) != NULL)
     {
         if (entry->d_name[0] == '.')
             continue;
-        printf("%s\n", entry->d_name);
+        if (long_flag)
+            print_long(dir, entry->d_name);
+        else
+            printf("%s\n", entry->d_name);
     }
 
     if (errno != 0)
-    {
         perror("readdir failed");
-    }
 
     closedir(dp);
+}
+
+/* Convert st_mode into a string like "-rwxr-xr-x" */
+void mode_to_str(mode_t m, char *s)
+{
+    s[0] = S_ISDIR(m) ? 'd' : S_ISLNK(m) ? 'l' : S_ISCHR(m) ? 'c' :
+           S_ISBLK(m) ? 'b' : S_ISFIFO(m) ? 'p' : S_ISSOCK(m) ? 's' : '-';
+
+    s[1] = (m & S_IRUSR) ? 'r' : '-';
+    s[2] = (m & S_IWUSR) ? 'w' : '-';
+    s[3] = (m & S_ISUID) ? ((m & S_IXUSR) ? 's' : 'S')
+                         : ((m & S_IXUSR) ? 'x' : '-');
+
+    s[4] = (m & S_IRGRP) ? 'r' : '-';
+    s[5] = (m & S_IWGRP) ? 'w' : '-';
+    s[6] = (m & S_ISGID) ? ((m & S_IXGRP) ? 's' : 'S')
+                         : ((m & S_IXGRP) ? 'x' : '-');
+
+    s[7] = (m & S_IROTH) ? 'r' : '-';
+    s[8] = (m & S_IWOTH) ? 'w' : '-';
+    s[9] = (m & S_ISVTX) ? ((m & S_IXOTH) ? 't' : 'T')
+                         : ((m & S_IXOTH) ? 'x' : '-');
+    s[10] = '\0';
+}
+
+void print_long(const char *dir, const char *name)
+{
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+
+    struct stat st;
+    if (lstat(path, &st) == -1)
+    {
+        perror(path);
+        return;
+    }
+
+    char perms[11];
+    mode_to_str(st.st_mode, perms);
+
+    struct passwd *pw = getpwuid(st.st_uid);
+    struct group *gr = getgrgid(st.st_gid);
+
+    /* ctime() gives "Mon Oct 11 10:30:00 2026\n"; we keep "Oct 11 10:30" */
+    char *t = ctime(&st.st_mtime);
+    char date[13];
+    strncpy(date, t + 4, 12);
+    date[12] = '\0';
+
+    printf("%s %2lu %-8s %-8s %8ld %s %s",
+           perms,
+           (unsigned long)st.st_nlink,
+           pw ? pw->pw_name : "?",
+           gr ? gr->gr_name : "?",
+           (long)st.st_size,
+           date,
+           name);
+
+    /* For symlinks, show "-> target" */
+    if (S_ISLNK(st.st_mode))
+    {
+        char target[4096];
+        ssize_t n = readlink(path, target, sizeof(target) - 1);
+        if (n != -1)
+        {
+            target[n] = '\0';
+            printf(" -> %s", target);
+        }
+    }
+    putchar('\n');
 }
