@@ -1,6 +1,6 @@
 /*
-* Programming Assignment 02: ls v1.1.0
-* Adds the -l (long listing) option.
+* Programming Assignment 02: ls v1.2.0
+* Adds: -l long listing (v1.1.0) and default "down then across" columns.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
@@ -18,7 +19,9 @@ extern int errno;
 
 void do_ls(const char *dir, int long_flag);
 void print_long(const char *dir, const char *name);
+void print_columns(char **names, int count, int maxlen);
 void mode_to_str(mode_t m, char *s);
+int get_terminal_width(void);
 
 int main(int argc, char *argv[])
 {
@@ -56,6 +59,15 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+/* Returns terminal width, or 80 if it cannot be detected */
+int get_terminal_width(void)
+{
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1 || w.ws_col == 0)
+        return 80;
+    return w.ws_col;
+}
+
 void do_ls(const char *dir, int long_flag)
 {
     struct dirent *entry;
@@ -66,22 +78,16 @@ void do_ls(const char *dir, int long_flag)
         return;
     }
 
-    /* In long mode, first pass: print the "total" line (in 1K blocks) */
-    if (long_flag)
+    /* Step 1: read all filenames into a dynamic array */
+    int capacity = 64;
+    int count = 0;
+    int maxlen = 0;
+    char **names = malloc(capacity * sizeof(char *));
+    if (names == NULL)
     {
-        long total = 0;
-        while ((entry = readdir(dp)) != NULL)
-        {
-            if (entry->d_name[0] == '.')
-                continue;
-            char path[4096];
-            struct stat st;
-            snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
-            if (lstat(path, &st) == 0)
-                total += st.st_blocks;
-        }
-        printf("total %ld\n", total / 2);
-        rewinddir(dp);
+        perror("malloc failed");
+        closedir(dp);
+        return;
     }
 
     errno = 0;
@@ -89,16 +95,97 @@ void do_ls(const char *dir, int long_flag)
     {
         if (entry->d_name[0] == '.')
             continue;
-        if (long_flag)
-            print_long(dir, entry->d_name);
-        else
-            printf("%s\n", entry->d_name);
+
+        if (count == capacity)
+        {
+            capacity *= 2;
+            char **tmp = realloc(names, capacity * sizeof(char *));
+            if (tmp == NULL)
+            {
+                perror("realloc failed");
+                break;
+            }
+            names = tmp;
+        }
+
+        names[count] = strdup(entry->d_name);
+        if (names[count] == NULL)
+        {
+            perror("strdup failed");
+            break;
+        }
+
+        int len = strlen(names[count]);
+        if (len > maxlen)
+            maxlen = len;
+        count++;
     }
 
     if (errno != 0)
         perror("readdir failed");
 
     closedir(dp);
+
+    /* Step 2: display */
+    if (long_flag)
+    {
+        long total = 0;
+        for (int i = 0; i < count; i++)
+        {
+            char path[4096];
+            struct stat st;
+            snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+            if (lstat(path, &st) == 0)
+                total += st.st_blocks;
+        }
+        printf("total %ld\n", total / 2);
+
+        for (int i = 0; i < count; i++)
+            print_long(dir, names[i]);
+    }
+    else
+    {
+        print_columns(names, count, maxlen);
+    }
+
+    /* Step 3: free memory */
+    for (int i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
+}
+
+/* "Down then across" column printing */
+void print_columns(char **names, int count, int maxlen)
+{
+    if (count == 0)
+        return;
+
+    int term_width = get_terminal_width();
+    int col_width = maxlen + 2;               /* longest name + 2 spaces */
+    int cols = term_width / col_width;
+    if (cols < 1)
+        cols = 1;
+    if (cols > count)
+        cols = count;
+    int rows = (count + cols - 1) / cols;     /* ceiling of count / cols */
+
+    for (int r = 0; r < rows; r++)
+    {
+        for (int c = 0; c < cols; c++)
+        {
+            int idx = c * rows + r;
+            if (idx >= count)
+                break;
+
+            /* pad every item except the last one on the row */
+            int next = (c + 1) * rows + r;
+            if (c + 1 < cols && next < count)
+                printf("%-*s", col_width, names[idx]);
+            else
+                printf("%s", names[idx]);
+        }
+        printf("\n");
+    }
 }
 
 /* Convert st_mode into a string like "-rwxr-xr-x" */
@@ -142,7 +229,7 @@ void print_long(const char *dir, const char *name)
     struct passwd *pw = getpwuid(st.st_uid);
     struct group *gr = getgrgid(st.st_gid);
 
-    /* ctime() gives "Mon Oct 11 10:30:00 2026\n"; we keep "Oct 11 10:30" */
+    /* ctime() gives "Mon Oct 11 10:30:00 2026\n"; keep "Oct 11 10:30" */
     char *t = ctime(&st.st_mtime);
     char date[13];
     strncpy(date, t + 4, 12);
@@ -157,7 +244,6 @@ void print_long(const char *dir, const char *name)
            date,
            name);
 
-    /* For symlinks, show "-> target" */
     if (S_ISLNK(st.st_mode))
     {
         char target[4096];
