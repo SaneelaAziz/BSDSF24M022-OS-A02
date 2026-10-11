@@ -56,3 +56,18 @@ A single loop over the array prints items in order, one after the other, which g
 `ioctl()` with the `TIOCGWINSZ` request asks the terminal driver for the current window size, filling a `struct winsize` that has the number of columns (`ws_col`) and rows. I use `ws_col` as the terminal width when calculating how many columns fit.
 
 If the program only used a fixed width of 80 columns, it would be wrong whenever the terminal is not 80 wide. On a wide terminal, it would waste space and print fewer columns than could fit. On a narrow terminal, lines would be longer than the window and would wrap in the middle of the layout, which breaks the column alignment. It also couldn't adapt when the user resizes the window.
+
+
+## Feature 4: Horizontal Column Display (v1.3.0)
+
+### Q1: Compare the implementation complexity of the "down then across" (vertical) printing logic versus the "across" (horizontal) printing logic. Which one requires more pre-calculation and why?
+
+The vertical ("down then across") logic is more complex and needs more pre-calculation. Before printing anything I must compute the column width (longest name + 2), the number of columns (`terminal_width / col_width`), and the number of rows (`ceil(count / cols)`). Printing is then done row by row, and each item's array index has to be calculated as `c * rows + r`. I also have to handle the last column being shorter than the others, so I check that the index is less than the file count.
+
+The horizontal ("across") logic is simpler. It only needs the terminal width and the column width. It loops through the array in its natural order, keeps a running horizontal position, and starts a new line when the next column would not fit. It doesn't need the number of rows or any index arithmetic, because the order of printing is the same as the order of the array.
+
+### Q2: Describe the strategy you used in your code to manage the different display modes (-l, -x, and default). How did your program decide which function to call for printing?
+
+I used an `enum DisplayMode` with three values: `MODE_DEFAULT`, `MODE_LONG` and `MODE_HORIZONTAL`. In `main`, a `getopt()` loop sets this variable: `-l` sets `MODE_LONG` and `-x` sets `MODE_HORIZONTAL`. If both are given, the last option wins. If no option is given, the mode stays `MODE_DEFAULT`.
+
+The mode is passed to `do_ls()`. After `do_ls()` has read all the filenames into a dynamic array, it checks the mode with an if / else-if chain. `MODE_LONG` calls the long-listing function `print_long()` for each file, `MODE_HORIZONTAL` calls `print_horizontal()`, and anything else calls the original down-then-across function `print_columns()`. The directory reading logic is shared, and only the display function differs.
