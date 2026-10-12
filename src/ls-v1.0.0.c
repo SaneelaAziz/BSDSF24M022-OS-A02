@@ -1,7 +1,7 @@
 /*
-* Programming Assignment 02: ls v1.3.0
-* Adds: -x horizontal (across) display.
-* Existing: -l long listing, default down-then-across columns.
+* Programming Assignment 02: ls v1.4.0
+* Adds: alphabetical sorting of entries (all display modes).
+* Existing: -l long listing, -x horizontal, default down-then-across.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +18,6 @@
 
 extern int errno;
 
-/* Display modes: the last option given on the command line wins */
 typedef enum
 {
     MODE_DEFAULT,      /* down then across */
@@ -32,6 +31,7 @@ void print_columns(char **names, int count, int maxlen);
 void print_horizontal(char **names, int count, int maxlen);
 void mode_to_str(mode_t m, char *s);
 int get_terminal_width(void);
+int compare_names(const void *a, const void *b);
 
 int main(int argc, char *argv[])
 {
@@ -79,6 +79,18 @@ int get_terminal_width(void)
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1 || w.ws_col == 0)
         return 80;
     return w.ws_col;
+}
+
+/*
+ * Comparison function for qsort().
+ * qsort passes pointers to the array ELEMENTS. Each element is a char *,
+ * so each argument is really a char ** (pointer to a string pointer).
+ */
+int compare_names(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
 }
 
 void do_ls(const char *dir, DisplayMode mode)
@@ -139,7 +151,10 @@ void do_ls(const char *dir, DisplayMode mode)
 
     closedir(dp);
 
-    /* Step 2: choose the display function based on the mode flag */
+    /* Step 2: sort the names alphabetically (before any display function) */
+    qsort(names, count, sizeof(char *), compare_names);
+
+    /* Step 3: choose the display function based on the mode flag */
     if (mode == MODE_LONG)
     {
         long total = 0;
@@ -165,7 +180,7 @@ void do_ls(const char *dir, DisplayMode mode)
         print_columns(names, count, maxlen);
     }
 
-    /* Step 3: free memory */
+    /* Step 4: free memory */
     for (int i = 0; i < count; i++)
         free(names[i]);
     free(names);
@@ -212,14 +227,13 @@ void print_horizontal(char **names, int count, int maxlen)
 
     int term_width = get_terminal_width();
     int col_width = maxlen + 2;
-    int pos = 0;        /* horizontal position where the next item starts */
-    int prev_len = 0;   /* length of the previously printed name */
+    int pos = 0;
+    int prev_len = 0;
 
     for (int i = 0; i < count; i++)
     {
         if (i > 0)
         {
-            /* would the next column still fit on this line? */
             if (pos + col_width + col_width > term_width)
             {
                 printf("\n");
@@ -227,7 +241,6 @@ void print_horizontal(char **names, int count, int maxlen)
             }
             else
             {
-                /* pad the previous item up to the column width */
                 printf("%*s", col_width - prev_len, "");
                 pos += col_width;
             }
