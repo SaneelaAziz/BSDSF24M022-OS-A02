@@ -103,3 +103,35 @@ int compare_names(const void *a, const void *b)
 ```
 
 The parameters are `const void *` because `void *` can point to any type, so the same `qsort()` works for ints, structs or strings. `const` promises that the comparison will not modify the data being sorted.
+
+
+## Feature 6: Colorized Output (v1.5.0)
+
+### Q1: How do ANSI escape codes work to produce color in a standard Linux terminal? Show the specific code sequence for printing text in green.
+
+ANSI escape codes are special character sequences that the terminal interprets as formatting commands instead of printing them. A sequence starts with the escape character (ASCII 27, written `\033` in C), followed by `[`, a number code, and the letter `m`. The code selects an attribute such as a color. Everything printed afterwards keeps that color until another code changes it. A reset code, `\033[0m`, returns the terminal to the default style.
+
+To print text in green:
+
+```c
+printf("\033[0;32m%s\033[0m", "hello");
+```
+
+`\033[0;32m` switches the text color to green, `hello` is printed in green, and `\033[0m` resets the color so the following text is not affected. The escape codes take no space on the screen, so when aligning columns I calculate padding from the plain filename length, not the length of the colored string.
+
+### Q2: To color an executable file, you need to check its permission bits. Explain which bits in the st_mode field you need to check to determine if a file is executable by the owner, group, or others.
+
+The execute permission has one bit for each class of user in `st_mode`:
+
+- `S_IXUSR` (0100): executable by the owner
+- `S_IXGRP` (0010): executable by the group
+- `S_IXOTH` (0001): executable by others
+
+I test them with bitwise AND. A non-zero result means the bit is set:
+
+```c
+if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+    /* file is executable by at least one class of user */
+```
+
+Before applying this check, I first make sure the entry is not a directory, because directories also carry the execute bit (it means "can enter"). In my code the directory check comes earlier in the chain, so directories are colored blue and only other files can be colored green.
