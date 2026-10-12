@@ -71,3 +71,35 @@ The horizontal ("across") logic is simpler. It only needs the terminal width and
 I used an `enum DisplayMode` with three values: `MODE_DEFAULT`, `MODE_LONG` and `MODE_HORIZONTAL`. In `main`, a `getopt()` loop sets this variable: `-l` sets `MODE_LONG` and `-x` sets `MODE_HORIZONTAL`. If both are given, the last option wins. If no option is given, the mode stays `MODE_DEFAULT`.
 
 The mode is passed to `do_ls()`. After `do_ls()` has read all the filenames into a dynamic array, it checks the mode with an if / else-if chain. `MODE_LONG` calls the long-listing function `print_long()` for each file, `MODE_HORIZONTAL` calls `print_horizontal()`, and anything else calls the original down-then-across function `print_columns()`. The directory reading logic is shared, and only the display function differs.
+
+
+## Feature 5: Alphabetical Sort (v1.4.0)
+
+### Q1: Why is it necessary to read all directory entries into memory before you can sort them? What are the potential drawbacks of this approach for directories containing millions of files?
+
+`readdir()` returns entries one at a time, in whatever order the file system stores them, which is not alphabetical. To know which name comes first, the program has to compare every name with the others, so all the names must be available at once. Sorting cannot be done on a stream that is printed as it arrives. That is why I read every name into a dynamic array first and call `qsort()` on it.
+
+For a directory with millions of files this has drawbacks. It uses a lot of memory, because every name is stored (a string plus a pointer for each entry). Nothing is printed until reading and sorting are completely finished, so the user waits and sees no output. Sorting takes O(n log n) time, which gets slow for very large n. In an extreme case the allocation could fail. Programs that need to handle such directories may skip sorting or process the entries in chunks.
+
+### Q2: Explain the purpose and signature of the comparison function required by qsort(). How does it work, and why must it take const void * arguments?
+
+`qsort()` is a generic function. It can sort an array of any type, so it doesn't know how to compare two elements. The comparison function tells it how. The signature is:
+
+```c
+int compare(const void *a, const void *b);
+```
+
+It must return a negative number if the first element should come before the second, zero if they are equal, and a positive number if the first should come after. `qsort()` calls it many times while sorting.
+
+In my program the array holds `char *` strings, so `qsort()` passes pointers to those elements, which are `char **`. The function casts them back and compares the strings with `strcmp()`:
+
+```c
+int compare_names(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
+}
+```
+
+The parameters are `const void *` because `void *` can point to any type, so the same `qsort()` works for ints, structs or strings. `const` promises that the comparison will not modify the data being sorted.
