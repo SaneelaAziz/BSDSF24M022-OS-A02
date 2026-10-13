@@ -135,3 +135,22 @@ if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
 ```
 
 Before applying this check, I first make sure the entry is not a directory, because directories also carry the execute bit (it means "can enter"). In my code the directory check comes earlier in the chain, so directories are colored blue and only other files can be colored green.
+
+
+## Feature 7: Recursive Listing (v1.6.0)
+
+### Q1: In a recursive function, what is a "base case"? In the context of your recursive ls, what is the base case that stops the recursion from continuing forever?
+
+A base case is the condition under which a recursive function stops calling itself and returns directly. Without one, the function would call itself forever and the program would crash with a stack overflow.
+
+In my recursive `ls`, the recursion only happens for entries that are directories. The base case is a directory that has no subdirectories (or one that cannot be opened). `do_ls()` lists its entries, finds no entry for which `S_ISDIR()` is true, makes no further recursive call, and returns. `opendir()` failing also ends that branch immediately with an error message. Because a directory tree is finite, every path of calls eventually reaches such a directory.
+
+Two details keep the recursion safe. Hidden entries are skipped when reading, so `.` and `..` are never visited, which would otherwise bring the program back to the same or the parent directory forever. I also use `lstat()`, so a symbolic link to a directory is not treated as a directory and is not followed, which prevents loops caused by links that point back to a parent.
+
+### Q2: Explain why it is essential to construct a full path (e.g., "parent_dir/subdir") before making a recursive call. What would happen if you simply called do_ls("subdir") from within the do_ls("parent_dir") function call?
+
+`readdir()` returns only the entry name, such as `subdir`, with no information about where it is. A relative name like `subdir` is resolved by the system against the program's current working directory, which does not change when the program descends into `parent_dir`. So `do_ls("subdir")` would look for `subdir` in the directory where the program was started, not inside `parent_dir`.
+
+The result would be wrong. Usually `opendir("subdir")` would fail with "Cannot open directory", because no such directory exists in the current directory, so the nested contents would never be listed. In the worst case, a directory with the same name exists in the starting directory, and the program would list that one by mistake, giving wrong output and possibly recursing in a loop.
+
+Building the full path with `parent_dir/subdir` gives the exact location of the entry. The same full path is also needed for `lstat()`, which must find the right file to know whether it is a directory.
